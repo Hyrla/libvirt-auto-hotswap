@@ -3,9 +3,13 @@
 import libvirt
 import pyudev
 import time
+from termcolor import colored
 from pprint import pprint
+import atexit
+import settings
 
 devices = []
+conn = None
 
 class Device:
     def __init__(self, device):
@@ -37,8 +41,10 @@ class Device:
         self.device_number = device.get('DEVNUM', None)
         self.bus_number = device.get('BUSNUM', None)
 
+        self = self.add_to_list()
+
     def __str__(self):
-        return str(self.vendor) + " - " + str(self.name) + " - " + str(self.vendor_id) + ":" + str(self.product_id) + " - path: " + str(self.bus_number) + "/" + str(self.device_number)
+        return colored(str(self.vendor), "red") + " - " + str(self.name) + " - " + colored(str(self.vendor_id) + ":" + str(self.product_id), "green") + " - " + colored("bus: " + str(self.bus_number) + "/" + str(self.device_number), "blue")
 
     def __eq__(self, obj):
         if not isinstance(obj, Device):
@@ -47,40 +53,64 @@ class Device:
         if self.device_number is not None and obj.device_number is not None and self.device_number == obj.device_number and self.bus_number == obj.bus_number:
             return True
         # If one of the devices has no name but same vendor id and product id
-        if self.vendor_id == obj.vendor_id and self.product_id == obj.product_id and (self.name is None or obj.name is None):
+        if self.vendor_id is not None and self.vendor_id == obj.vendor_id and self.product_id == obj.product_id and (self.name is None or obj.name is None):
             return True
-
         # If one of the devices has no bus data but same vendor id and product id
         if self.vendor_id is not None and obj.vendor_id is not None and self.vendor_id == obj.vendor_id and self.product_id == obj.product_id and (self.device_number is None or obj.device_number is None):
             return True
+        return False
 
     def add_to_list(self):
         global devices
         if not self in devices:
             devices.append(self)
+            return self
+        else:
+            return devices[devices.index(self)]
 
 context = pyudev.Context()
 monitor = pyudev.Monitor.from_netlink(context)
 monitor.filter_by(subsystem='usb')
-def log_event(action, device):
+def log_event(action, device_udev):
+    device = Device(device_udev)
     if action == "add":
-        pprint(device.__dict__)
-        print(dev.get('DEVNAME'))
+        print("Added", device)
+    elif action == "remove":
+        print("Removed", device)
+    else:
+        print("Unkown action", action, device)
 observer = pyudev.MonitorObserver(monitor, log_event)
 observer.start()
 
-def test():
+def get_all_devices():
     for device in context.list_devices(subsystem="usb"):
-        #infos = dict(device.items())
-        ##print(infos.get('DEVPATH', 'Unkown path'), infos.get('DEVNAME', 'Unkown name'))
-        ##print(infos)
         d = Device(device.items())
         d.add_to_list()
 
+if __name__ == '__main__':
+    get_all_devices()
+    print(colored(str(len(devices)) + " USB devices connected:", "yellow"))
     for device in devices:
         print(device)
 
-test()
-#while True:
-#    time.sleep(2)
-#    print("Wait...")
+    print("\nConnecting to libvirt...")
+
+    try:
+        conn = libvirt.open(settings.hypervisor + ':///system')
+    except libvirt.libvirtError:
+        print(colored("Can't connect to libvirt", "red"))
+        exit(1)
+    atexit.register(conn.close)
+    
+    print("Connected to libvirt", settings.hypervisor)
+
+    for vm in settings.vms:
+        try:
+            domain = conn.lookupByName(vm['domain'])
+            #pprint(domain.XMLDesc(0))
+        except libvirt.libvirtError:
+            print(colored("Can't find domain " + vm['domain']))
+
+    while True:
+        time.sleep(2)
+        pass
